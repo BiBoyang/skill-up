@@ -263,22 +263,22 @@ func TestListSkillFiles_EmptyDir(t *testing.T) {
 func TestListSkillFiles_SymlinkedSourceDir(t *testing.T) {
 	t.Parallel()
 	if goruntime.GOOS == "windows" {
-		t.Skip("symlink creation requires privileges on Windows")
+		t.Skip("symlink creation requires extra privileges on this platform")
 	}
 
-	real := t.TempDir()
-	if err := os.WriteFile(filepath.Join(real, "SKILL.md"), []byte("# Skill"), 0o644); err != nil {
+	realDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(realDir, "SKILL.md"), []byte("# Skill"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(real, "references"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(realDir, "references"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(real, "references", "guide.md"), []byte("ref"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(realDir, "references", "guide.md"), []byte("ref"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	link := filepath.Join(t.TempDir(), "skill-link")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(realDir, link); err != nil {
 		t.Fatal(err)
 	}
 
@@ -297,15 +297,15 @@ func TestListSkillFiles_SymlinkedSourceDir(t *testing.T) {
 func TestInstallSkill_SymlinkedSource(t *testing.T) {
 	t.Parallel()
 	if goruntime.GOOS == "windows" {
-		t.Skip("symlink creation requires privileges on Windows")
+		t.Skip("symlink creation requires extra privileges on this platform")
 	}
 
-	real := t.TempDir()
-	if err := os.WriteFile(filepath.Join(real, "SKILL.md"), []byte("# Skill"), 0o644); err != nil {
+	realDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(realDir, "SKILL.md"), []byte("# Skill"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(t.TempDir(), "skill-link")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(realDir, link); err != nil {
 		t.Fatal(err)
 	}
 
