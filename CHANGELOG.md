@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `skill-up run --workspace <dir>` can now evaluate a local `none` runtime in
+  an existing, externally owned workspace when case parallelism is one. The
+  workspace is always preserved; `--no-delete` also remains available to keep
+  workspaces and containers created by skill-up. Agent-judge diff capture uses
+  an isolated temporary Git repository, so skill-up does not commit, stage, or
+  invoke repository-configured clean/process filters while taking its
+  before/after snapshot. Selected cases, retries, and iterations intentionally
+  share the directory sequentially, so setup and agent changes carry forward.
+  Report directories that overlap the external workspace are rejected before
+  cleanup, event logs must remain outside it, nested skill installation avoids
+  recursively copying its own target, and snapshot paths are handled literally
+  on POSIX shells.
+
 ### Fixed
 - Qoder CLI now receives explicit model names and custom IDs in initial,
   stdin, and resumed calls instead of silently discarding values outside the
