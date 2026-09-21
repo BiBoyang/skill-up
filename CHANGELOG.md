@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add an experimental DeepSeek Harness plugin bundle that exposes structured
+  validation, background evaluation, and report-summary tools together with
+  the canonical `skill-upper` Skill for evidence-based Skill iteration.
 - `skill-up run --workspace <dir>` can now evaluate a local `none` runtime in
   an existing, externally owned workspace when case parallelism is one. The
   workspace is always preserved; `--no-delete` also remains available to keep
@@ -17,9 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before/after snapshot. Selected cases, retries, and iterations intentionally
   share the directory sequentially, so setup and agent changes carry forward.
   Report directories that overlap the external workspace are rejected before
-  cleanup, event logs must remain outside it, nested skill installation avoids
-  recursively copying its own target, and snapshot paths are handled literally
-  on POSIX shells.
+   cleanup, event logs must remain outside it, nested skill installation avoids
+   recursively copying its own target, and snapshot paths are handled literally
+   on POSIX shells.
 
 ### Fixed
 - Qoder CLI now receives explicit model names and custom IDs in initial,

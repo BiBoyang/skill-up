@@ -63,6 +63,8 @@ skill-up/
 │       ├── assets/          #     YAML templates (eval.yaml.tmpl, case.yaml.tmpl)
 │       ├── references/      #     Reference docs for CLI, schema, judges, migration
 │       └── evals/           #     Evals for the skill-upper Skill itself
+├── plugins/                 # Optional Agent-harness integrations
+│   └── dsh-skill-up/        #   DeepSeek Harness bundle and native skill-up tools
 ├── docs/                    # VitePress documentation site (guide/, zh/, user-manual/, .vitepress/, public/)
 ├── schemas/evalevent/       # Versioned JSON Schemas for the evaluation event protocol
 ├── .githooks/               # Git hooks (commit message, pre-commit checks); see "Engineering Constraints" below
@@ -153,6 +155,11 @@ skill-up/
 
 - **Meaning**: Contains installable Agent host plugin bundles. A plugin may bundle Skills, lifecycle hooks, scripts, schemas, and MCP server configuration.
 - **Maintenance advice**: Validate each manifest and bundled Skill with the repository's documented plugin and Skill validators. Keep hook trust, compatibility, and local data behavior explicit in the plugin README.
+
+### `plugins/dsh-skill-up/`
+
+- **Meaning**: An optional DeepSeek Harness bundle that registers structured `skill-up` tools and packages the canonical `skill-upper` Skill. It is distributed independently from the Go binary.
+- **Maintenance advice**: Keep its subprocess boundary argv-based, confine selected files to the caller's DSH workspace, and run `npm test` from the plugin directory after changing the plugin or `skills/skill-upper/`.
 
 ### `docs/`
 
