@@ -1294,18 +1294,12 @@ func TestCustomAgent_RunLocal_TimeoutSynthesizesOutputFile(t *testing.T) {
 	if !strings.Contains(res.Stderr, "synthesized") {
 		t.Fatalf("res.Stderr = %q, want it to name the artifact as synthesized", res.Stderr)
 	}
-	if !containsBasename(res.Artifacts.GeneratedFiles, "session-result.json") {
-		t.Fatalf("generated_files = %v, want the synthesized session-result.json registered", res.Artifacts.GeneratedFiles)
+	if !containsBasename(res.Artifacts.GeneratedFileSources, "session-result.json") {
+		t.Fatalf("generated_file_sources = %v, want the synthesized session-result.json registered for artifact collection and diff exclusion", res.Artifacts.GeneratedFileSources)
 	}
 	// The file must exist in the runtime with parseable content — downstream
 	// tooling reads it like any engine output.
-	tmp, err := os.CreateTemp("", "synth-check-*")
-	if err != nil {
-		t.Fatalf("temp file: %v", err)
-	}
-	tmpName := tmp.Name()
-	_ = tmp.Close()
-	defer os.Remove(tmpName)
+	tmpName := filepath.Join(t.TempDir(), "synth-check.json")
 	if err := rt.DownloadFile(context.Background(), "outputs/session-result.json", tmpName); err != nil {
 		t.Fatalf("download synthesized output: %v", err)
 	}
