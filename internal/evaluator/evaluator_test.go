@@ -114,6 +114,7 @@ type mockRuntime struct {
 	downloadDirFunc  func(ctx context.Context, sourceDir, targetDir string) error
 	downloadDirCall  atomic.Int32
 	execEnv          map[string]string
+	execShell        string
 	execCall         atomic.Int32
 	execFunc         func(ctx context.Context, command string, opts runtime.ExecOptions) (runtime.ExecResult, error)
 }
@@ -163,7 +164,11 @@ func (m *mockRuntime) Exec(ctx context.Context, command string, opts runtime.Exe
 	if m.execFunc != nil {
 		return m.execFunc(ctx, command, opts)
 	}
-	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	shell := m.execShell
+	if shell == "" {
+		shell = "bash"
+	}
+	cmd := exec.CommandContext(ctx, shell, "-c", command)
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	} else {
@@ -470,8 +475,9 @@ func TestEvaluatorSessionHelpers(t *testing.T) {
 			{Role: transcript.RoleToolCall, Content: "tool"},
 		},
 		Artifacts: &agent.SessionArtifacts{
-			WorkspaceDiff:  "diff",
-			GeneratedFiles: []string{"a.txt"},
+			WorkspaceDiff:        "diff",
+			GeneratedFiles:       []string{"snapshot.txt"},
+			GeneratedFileSources: []string{"workspace.txt"},
 		},
 	}
 	normalized := normalizeSessionResult(original)
@@ -487,13 +493,16 @@ func TestEvaluatorSessionHelpers(t *testing.T) {
 	if sessionWorkspaceDiff(original) != "diff" {
 		t.Fatal("sessionWorkspaceDiff did not return diff")
 	}
-	if got := sessionGeneratedFiles(original); len(got) != 1 || got[0] != "a.txt" {
-		t.Fatalf("sessionGeneratedFiles = %#v, want a.txt", got)
+	if got := sessionGeneratedFiles(original); len(got) != 1 || got[0] != "snapshot.txt" {
+		t.Fatalf("sessionGeneratedFiles = %#v, want only snapshot.txt", got)
+	}
+	if got := sessionGeneratedFilesForDiff(original); len(got) != 2 || got[0] != "snapshot.txt" || got[1] != "workspace.txt" {
+		t.Fatalf("sessionGeneratedFilesForDiff = %#v, want snapshot and workspace paths", got)
 	}
 	if normalizeSessionResult(nil) == nil {
 		t.Fatal("normalizeSessionResult(nil) returned nil")
 	}
-	if sessionTranscript(nil) != nil || sessionWorkspaceDiff(nil) != "" || sessionGeneratedFiles(nil) != nil {
+	if sessionTranscript(nil) != nil || sessionWorkspaceDiff(nil) != "" || sessionGeneratedFiles(nil) != nil || sessionGeneratedFilesForDiff(nil) != nil {
 		t.Fatal("nil session helpers should return empty values")
 	}
 }
@@ -1728,6 +1737,53 @@ func TestExecuteCase_RetryPolicyRetriesErrors(t *testing.T) {
 	}
 }
 
+func TestExecuteCase_QoderInvalidModelRemainsErrorAcrossRetries(t *testing.T) {
+	t.Parallel()
+
+	runCalls := atomic.Int32{}
+	ag := agent.NewQoderCLIAgent(agent.Config{
+		ModelName: "missing-model", RequestedModelName: "missing-model",
+	})
+	rt := &mockRuntime{
+		workspace: t.TempDir(),
+		execFunc: func(_ context.Context, command string, _ runtime.ExecOptions) (runtime.ExecResult, error) {
+			switch {
+			case strings.Contains(command, "qodercli --permission-mode="):
+				runCalls.Add(1)
+				if !strings.Contains(command, " --model 'missing-model' ") {
+					t.Errorf("retry dropped explicit model: %s", command)
+				}
+				return runtime.ExecResult{ExitCode: 42, Stderr: `Invalid model "missing-model"`}, nil
+			case strings.Contains(command, "--version"):
+				return runtime.ExecResult{Stdout: "1.1.9"}, nil
+			default:
+				return runtime.ExecResult{}, nil
+			}
+		},
+	}
+	e := newTestEvaluator(EvalOptions{
+		Agent: ag, OutputDir: t.TempDir(),
+		EvalCfg: &config.EvalConfig{
+			Cases: config.CasesConfig{
+				RetryPolicy: config.RetryPolicy{MaxRetries: 1, RetryOn: []string{"error"}},
+			},
+		},
+	})
+	result := e.executeCase(context.Background(), &config.CaseConfig{
+		ID: "qoder-invalid-model", Input: config.Input{Prompt: "hello"},
+	}, "with_skill", rt, nil)
+
+	if runCalls.Load() != 2 {
+		t.Fatalf("expected two configured attempts, got %d", runCalls.Load())
+	}
+	if result.Status != judge.StatusError || result.Error == nil || !strings.Contains(result.Error.Error(), `with model "missing-model"`) {
+		t.Fatalf("model rejection must remain execution ERROR: status=%s error=%v", result.Status, result.Error)
+	}
+	if result.ExitCode != 42 || result.RequestedModel != "missing-model" || result.AppliedModel != "missing-model" {
+		t.Fatalf("retry lost exit/model metadata: exit=%d requested=%q applied=%q", result.ExitCode, result.RequestedModel, result.AppliedModel)
+	}
+}
+
 func TestExecuteCase_RetryPolicyDoesNotRetryUnmatchedReason(t *testing.T) {
 	t.Parallel()
 
@@ -2012,7 +2068,7 @@ func TestExecuteCase_JudgeCorrectionPreservesAttemptArtifactsOnSuccess(t *testin
 	}
 }
 
-func TestExecuteCase_CustomJudgeCorrectionSnapshotsFrameworkFiles(t *testing.T) { //nolint:funlen // Integration coverage intentionally exercises the real CustomAgent and evaluator artifact pipeline.
+func TestExecuteCase_CustomJudgeCorrectionExcludesFrameworkFiles(t *testing.T) { //nolint:funlen // Integration coverage intentionally exercises the real CustomAgent and evaluator artifact pipeline.
 	outputDir := t.TempDir()
 	scriptPath := filepath.Join(t.TempDir(), "custom-judge.sh")
 	script := `#!/bin/sh
@@ -2076,32 +2132,23 @@ printf '%s\n' "$result" > "$output_file"
 		t.Fatalf("two independent Judge runs must report two turns, got %#v", result.JudgeSession)
 	}
 
+	if result.JudgeSession.Artifacts == nil {
+		t.Fatal("expected judge session artifacts")
+	}
+	if len(result.JudgeSession.Artifacts.GeneratedFiles) != 2 ||
+		!slices.ContainsFunc(result.JudgeSession.Artifacts.GeneratedFiles, func(path string) bool { return filepath.Base(path) == "raw-response-attempt-1.txt" }) ||
+		!slices.ContainsFunc(result.JudgeSession.Artifacts.GeneratedFiles, func(path string) bool { return filepath.Base(path) == "raw-response-attempt-2.txt" }) {
+		t.Fatalf("judge artifacts = %v, want only raw response snapshots", result.JudgeSession.Artifacts.GeneratedFiles)
+	}
+	if len(result.JudgeSession.Artifacts.GeneratedFileSources) != 2 {
+		t.Fatalf("framework diff exclusions = %v, want input/output paths", result.JudgeSession.Artifacts.GeneratedFileSources)
+	}
 	judgeDir := filepath.Join(outputDir, caseCfg.ID, "with_skill", "outputs", "judge", "run")
-	firstInput := readTestFile(t, filepath.Join(judgeDir, "messages.json"))
-	retryInput := readTestFile(t, filepath.Join(judgeDir, "retry", "messages.json"))
-	firstOutput := readTestFile(t, filepath.Join(judgeDir, "session-result.json"))
-	retryOutput := readTestFile(t, filepath.Join(judgeDir, "retry", "session-result.json"))
-	if !strings.Contains(firstInput, "configured criterion") || strings.Contains(firstInput, "Agent Judge Output Correction") {
-		t.Fatalf("unexpected first Judge input snapshot: %s", firstInput)
+	for _, relativePath := range []string{"messages.json", "session-result.json", "retry/messages.json", "retry/session-result.json"} {
+		if _, err := os.Stat(filepath.Join(judgeDir, relativePath)); !os.IsNotExist(err) {
+			t.Fatalf("framework artifact %s should not be archived, stat error: %v", relativePath, err)
+		}
 	}
-	if !strings.Contains(retryInput, "Agent Judge Output Correction") || !strings.Contains(retryInput, "not-json") {
-		t.Fatalf("retry input snapshot lost correction context: %s", retryInput)
-	}
-	if !strings.Contains(firstOutput, `"final_message":"not-json"`) {
-		t.Fatalf("first output snapshot was overwritten: %s", firstOutput)
-	}
-	if !strings.Contains(retryOutput, `criterion-1`) || strings.Contains(retryOutput, `"final_message":"not-json"`) {
-		t.Fatalf("unexpected retry output snapshot: %s", retryOutput)
-	}
-}
-
-func readTestFile(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return string(data)
 }
 
 func TestExecuteCase_CaseLevelJudge(t *testing.T) {
@@ -2465,6 +2512,153 @@ func TestExecuteCase_AgentJudgeWithExistingGitRepoReceivesWorkspaceDiff(t *testi
 	assertJudgePromptReferencesMaterial(t, *judgePrompt, "workspace_diff", "workspace.diff")
 }
 
+func TestExecuteCase_AgentJudgeWithExternalWorkspacePreservesGitState(t *testing.T) {
+	repoDir := t.TempDir()
+	workspace := filepath.Join(repoDir, "project")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatalf("create workspace subdirectory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "notes.txt"), []byte("committed\n"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	initGitRepo(t, repoDir)
+	filterMarker := configureSideEffectCleanFilter(t, repoDir)
+	if err := os.WriteFile(filepath.Join(repoDir, "staged.txt"), []byte("already staged\n"), 0o600); err != nil {
+		t.Fatalf("write staged file: %v", err)
+	}
+	runCmd(t, repoDir, "git", "add", "staged.txt")
+	if err := os.Remove(filterMarker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reset clean filter marker after staging: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "notes.txt"), []byte("before agent\n"), 0o600); err != nil {
+		t.Fatalf("write pre-existing workspace change: %v", err)
+	}
+
+	headBefore := gitOutput(t, repoDir, "rev-parse", "HEAD")
+	indexBefore := gitOutput(t, repoDir, "diff", "--cached", "--binary")
+	objectsBefore := gitOutput(t, repoDir, "count-objects", "-v")
+	judgePrompt, ag := newWorkspaceDiffJudgeAgent(t)
+
+	e := newTestEvaluator(EvalOptions{Agent: ag, WorkspaceDir: workspace})
+	caseCfg := &config.CaseConfig{
+		ID:    "case-external-git-diff",
+		Title: "Agent judge preserves external git state",
+		Input: config.Input{Prompt: "inspect repo"},
+		Judge: config.JudgeConfig{
+			Type:     "agent_judge",
+			Criteria: []string{"diff included"},
+		},
+	}
+
+	result := e.executeCase(context.Background(), caseCfg, "with_skill", &mockRuntime{
+		workspace: workspace,
+		execEnv: map[string]string{
+			"GIT_DIR":            filepath.Join(t.TempDir(), "missing.git"),
+			"GIT_CONFIG_COUNT":   "1",
+			"GIT_CONFIG_KEY_0":   "filter.sideeffect.clean",
+			"GIT_CONFIG_VALUE_0": fmt.Sprintf("%q %q", filepath.Join(t.TempDir(), "missing-filter"), filterMarker),
+		},
+	}, nil)
+
+	if result.Status != judge.StatusPass {
+		t.Fatalf("expected PASS status, got %s", result.Status)
+	}
+	assertJudgePromptReferencesMaterial(t, *judgePrompt, "workspace_diff", "workspace.diff")
+	workspaceDiff := sessionWorkspaceDiff(result.SessionResult)
+	if !strings.Contains(workspaceDiff, "-before agent") || !strings.Contains(workspaceDiff, "+after") {
+		t.Fatalf("external workspace diff did not capture the agent change: %s", workspaceDiff)
+	}
+	if strings.Contains(workspaceDiff, "staged.txt") {
+		t.Fatalf("external workspace diff included a pre-existing change outside the selected workspace: %s", workspaceDiff)
+	}
+	if headAfter := gitOutput(t, repoDir, "rev-parse", "HEAD"); headAfter != headBefore {
+		t.Fatalf("external workspace HEAD changed: before %q, after %q", headBefore, headAfter)
+	}
+	if indexAfter := gitOutput(t, repoDir, "diff", "--cached", "--binary"); indexAfter != indexBefore {
+		t.Fatalf("external workspace index changed:\n--- before ---\n%s\n--- after ---\n%s", indexBefore, indexAfter)
+	}
+	if objectsAfter := gitOutput(t, repoDir, "count-objects", "-v"); objectsAfter != objectsBefore {
+		t.Fatalf("external workspace object database changed:\n--- before ---\n%s\n--- after ---\n%s", objectsBefore, objectsAfter)
+	}
+	if _, err := os.Stat(filterMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("external workspace clean filter ran during snapshot, stat error: %v", err)
+	}
+}
+
+func TestExternalWorkspaceDiffTreatsPathspecMagicNamesLiterally(t *testing.T) {
+	repoDir := t.TempDir()
+	workspace := filepath.Join(repoDir, "project")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	magicPath := filepath.Join(workspace, ":(exclude)*")
+	deletedPath := filepath.Join(workspace, "deleted.txt")
+	if err := os.WriteFile(magicPath, []byte("before magic\n"), 0o600); err != nil {
+		t.Fatalf("write magic path: %v", err)
+	}
+	if err := os.WriteFile(deletedPath, []byte("before delete\n"), 0o600); err != nil {
+		t.Fatalf("write deleted path: %v", err)
+	}
+	initGitRepo(t, repoDir)
+	rt := &mockRuntime{workspace: workspace, execShell: "sh"}
+
+	state, err := prepareExternalWorkspaceDiffState(context.Background(), rt)
+	if err != nil {
+		t.Fatalf("prepare external workspace snapshot: %v", err)
+	}
+	defer os.RemoveAll(state.temporaryPath) //nolint:errcheck
+	if err := os.WriteFile(magicPath, []byte("after magic\n"), 0o600); err != nil {
+		t.Fatalf("update magic path: %v", err)
+	}
+	if err := os.Remove(deletedPath); err != nil {
+		t.Fatalf("delete tracked path: %v", err)
+	}
+
+	diff, err := collectWorkspaceDiff(context.Background(), rt, state, nil)
+	if err != nil {
+		t.Fatalf("collect external workspace diff: %v", err)
+	}
+	for _, material := range []string{"before magic", "after magic", "deleted.txt", "before delete"} {
+		if !strings.Contains(diff, material) {
+			t.Fatalf("workspace diff missing %q: %s", material, diff)
+		}
+	}
+}
+
+func TestExecuteCase_AgentJudgeWithExternalNonGitWorkspaceDoesNotInitializeGit(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "notes.txt"), []byte("before\n"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+
+	judgePrompt, ag := newWorkspaceDiffJudgeAgent(t)
+	e := newTestEvaluator(EvalOptions{Agent: ag, WorkspaceDir: workspace})
+	caseCfg := &config.CaseConfig{
+		ID:    "case-external-no-git",
+		Title: "Agent judge preserves external non-Git workspace",
+		Input: config.Input{Prompt: "inspect workspace"},
+		Context: config.Context{
+			Git: &config.GitContext{Init: true},
+		},
+		Judge: config.JudgeConfig{
+			Type:     "agent_judge",
+			Criteria: []string{"workspace preserved"},
+		},
+	}
+
+	result := e.executeCase(context.Background(), caseCfg, "with_skill", &mockRuntime{workspace: workspace}, nil)
+
+	if result.Status != judge.StatusPass {
+		t.Fatalf("expected PASS status, got %s", result.Status)
+	}
+	if strings.Contains(*judgePrompt, "workspace.diff") {
+		t.Fatalf("external non-Git workspace unexpectedly produced a Git diff: %s", *judgePrompt)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".git")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("external non-Git workspace was initialized as a repository, stat error: %v", err)
+	}
+}
+
 func TestExecuteCase_AgentJudgeWithClonedGitRepoReceivesWorkspaceDiff(t *testing.T) {
 	originDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(originDir, "notes.txt"), []byte("before\n"), 0o600); err != nil {
@@ -2605,7 +2799,7 @@ func TestExecuteCase_AgentJudgeWithGitWorktreeReceivesWorkspaceDiff(t *testing.T
 
 	judgePrompt, ag := newWorkspaceDiffJudgeAgent(t)
 
-	e := newTestEvaluator(EvalOptions{Agent: ag})
+	e := newTestEvaluator(EvalOptions{Agent: ag, WorkspaceDir: worktreeDir})
 	caseCfg := &config.CaseConfig{
 		ID:    "case-worktree-git-diff",
 		Title: "Agent judge with git worktree gets diff",
@@ -3289,6 +3483,41 @@ func runCmdContext(ctx context.Context, t *testing.T, dir, name string, args ...
 	if err != nil {
 		t.Fatalf("%s %s failed: %v: %s", name, strings.Join(args, " "), err, output)
 	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v: %s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
+}
+
+func configureSideEffectCleanFilter(t *testing.T, repoDir string) string {
+	t.Helper()
+	filterDir := t.TempDir()
+	filterScript := filepath.Join(filterDir, "clean-filter.sh")
+	filterMarker := filepath.Join(filterDir, "filter-ran")
+	if err := os.WriteFile(filterScript, []byte("#!/bin/sh\nprintf hit >> \"$1\"\ncat\n"), 0o600); err != nil {
+		t.Fatalf("write clean filter: %v", err)
+	}
+	//nolint:gosec // the private test fixture must be executable to model a Git clean filter
+	if err := os.Chmod(filterScript, 0o700); err != nil {
+		t.Fatalf("make clean filter executable: %v", err)
+	}
+	runCmd(t, repoDir, "git", "config", "filter.sideeffect.clean", fmt.Sprintf("%q %q", filterScript, filterMarker))
+	if err := os.WriteFile(filepath.Join(repoDir, ".gitattributes"), []byte("*.txt filter=sideeffect\n"), 0o600); err != nil {
+		t.Fatalf("write attributes: %v", err)
+	}
+	runCmd(t, repoDir, "git", "add", ".gitattributes")
+	runCmd(t, repoDir, "git", "commit", "-qm", "configure filter")
+	if err := os.Remove(filterMarker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reset clean filter marker: %v", err)
+	}
+	return filterMarker
 }
 
 func TestExecuteCase_InputPromptOnly(t *testing.T) {

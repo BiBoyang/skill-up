@@ -224,6 +224,7 @@ engine:
     name: claude-sonnet-4-6
   custom:
     transport: local             # local | http
+    conversation_mode: batch     # batch (default) | stateful
     response_format: session_result   # session_result (default) | text
     timeout_seconds: 300
     env:                         # credentials and secrets — NEVER reference these in command/args
@@ -250,6 +251,10 @@ Key fields (full contract in [docs/design/custom-engine.md](../design/custom-eng
 - **`response_format`** (optional, default `session_result`) — how skill-up parses the agent's output.
   - `session_result`: read a full `SessionResult` JSON from `local.output_file` (when configured) or stdout. Carries `exit_code` / `final_message` / `transcript` / `turns` / `input_tokens` / `output_tokens` / `artifacts`. **Recommended**: keeps the full context for judges and reports.
   - `text`: take stdout verbatim as `final_message`. skill-up synthesises a minimal transcript (input messages + the assistant reply) so judges still receive a conversation. Use only for simple scripts that do not produce structured output.
+- **`conversation_mode`** (optional, default `batch`) — how `input.turns` is delivered.
+  - `batch`: preserve the existing behavior and invoke the Custom Engine once with every configured message.
+  - `stateful`: invoke the same local command or HTTP endpoint once per user turn. The first `SessionInput` omits `session_id`; each later invocation receives the ID returned by the preceding `SessionResult`. This mode requires `response_format: session_result`.
+    A custom HTTP `request_body` can place that value with `${session_id}`; it is an empty string on the first invocation.
 - **`timeout_seconds`** (optional) — per-call deadline. Falls back to the case-level timeout when unset; when both are set, skill-up takes the smaller of the two so the value handed to the agent matches the real wall-clock budget.
 - **`env`** (optional) — credentials and secret parameters. Values are injected into the agent process as environment variables. **This is the only channel allowed to carry credentials**: `command` / `args` / `cwd` / `input_file` / `output_file` reject secret-shaped values at config load.
 - **`kwargs`** (optional) — non-secret knobs exposed to templates as `${kwargs.<key>}`. Unlike `env`, kwargs are subject to the same strict secret-rejection as command-line fields, so they must not carry credentials or credential-shaped keys.
@@ -636,7 +641,7 @@ Capture semantics:
 | `qodercli` | Yes | `-r <session-id>` flag |
 | `codex` | Yes | `codex resume <thread-id>` command |
 | `qwen_code` | Not yet | Falls back to batch mode |
-| `custom` | Not yet | Falls back to batch mode |
+| `custom` | Opt-in | `conversation_mode: stateful` with `SessionInput.session_id`; otherwise batch mode |
 
 When an agent does not implement session resumption, all turns are concatenated
 and sent as a single prompt. A warning is logged.
@@ -1042,10 +1047,40 @@ engine:
 >
 > **Note:** the `--api-key` flag and any provider API key declared in `eval.yaml` are **not** used as the qodercli auth token. Authentication comes from the selected edition's PAT or local login state.
 
-qodercli also has model-parameter restrictions:
+qodercli model selection:
 
-- `model` must be one of qodercli's predefined values: `lite`, `efficient`, `auto`, `performance`, `ultimate`
-- `base_url` has no effect for qodercli
+- A non-empty `engine.model.name` is passed to Qoder's `--model` after trimming
+  surrounding whitespace, preserving case and the complete identifier. This
+  applies to initial runs, stdin prompts, and resumed sessions.
+- Historical tiers (`lite`, `efficient`, `auto`, `performance`, `ultimate`),
+  concrete model names, and custom model IDs are forwarded without a local
+  allowlist. Availability depends on the installed Qoder CLI and account.
+  Use Qoder's model selector or `--list-models` where supported to check it.
+- Omit the model to use Qoder's default. An invalid or unavailable explicit
+  model produces an execution error with model context and Qoder's diagnostic;
+  skill-up does not silently retry with the default model.
+- `base_url` has no effect for qodercli. Provider API keys are not Qoder PATs.
+- Requested/applied model report fields describe the requested value and the
+  forwarded argument, not independently verified server-side model selection.
+
+For example, select an available concrete model by its exact name:
+
+```yaml
+engine:
+  name: qodercli
+  model:
+    name: Qwen3.7-Plus
+```
+
+For an opaque ID containing `/`, use `engine.model.name` in YAML or an explicit
+CLI provider to avoid the legacy `provider/model` interpretation:
+
+```bash
+skill-up run ./evals/eval.yaml --engine qodercli --provider qoder --model 'team/custom-model-id'
+```
+
+The provider above only disambiguates CLI parsing; Qoder still owns routing and
+authentication. Configure any custom model in Qoder first.
 
 ### qwen_code credentials
 
