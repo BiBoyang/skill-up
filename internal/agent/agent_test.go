@@ -262,7 +262,7 @@ func TestListSkillFiles_EmptyDir(t *testing.T) {
 
 func TestListSkillFiles_SymlinkedSourceDir(t *testing.T) {
 	t.Parallel()
-	if goruntime.GOOS == "windows" {
+	if goruntime.GOOS == platform.GOOSWindows {
 		t.Skip("symlink creation requires extra privileges on this platform")
 	}
 
@@ -296,7 +296,7 @@ func TestListSkillFiles_SymlinkedSourceDir(t *testing.T) {
 
 func TestInstallSkill_SymlinkedSource(t *testing.T) {
 	t.Parallel()
-	if goruntime.GOOS == "windows" {
+	if goruntime.GOOS == platform.GOOSWindows {
 		t.Skip("symlink creation requires extra privileges on this platform")
 	}
 
