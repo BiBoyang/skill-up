@@ -166,6 +166,18 @@ The validator checks that:
 - All required fields are present
 - Field values are within the allowed range
 
+When the eval config lives inside a skill directory (a `SKILL.md` exists at
+the skill root), `validate` additionally checks the skill's content integrity
+and prints one warning per finding — without changing the exit code:
+
+- SKILL.md opens with a closed YAML frontmatter block (`---` fences)
+- the frontmatter declares non-empty `name` and `description` fields
+- every `references/`, `assets/`, `scripts/` path cited in the markdown body
+  exists on disk (paths inside fenced code blocks are treated as
+  documentation examples and ignored)
+
+Pass `--strict` to promote these warnings to validation failures (exit 1).
+
 ---
 
 ## skill-up list-cases

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `skill-up validate` now checks the content-level integrity of the
+  surrounding skill once the eval config is valid: SKILL.md must open with a
+  closed YAML frontmatter block declaring non-empty `name` and `description`
+  fields, and every `references/`, `assets/`, `scripts/` path cited in the
+  markdown body must exist on disk (paths inside fenced code blocks are
+  ignored as documentation examples). Findings print as warnings without
+  changing the exit code; a new `--strict` flag promotes them to validation
+  failures.
 - Tagged releases now attach self-contained Codex and DeepSeek Harness
   plugin archives assembled with the canonical `skill-upper` source, including
   checksums and attestations without publishing to an external registry. Plugin
