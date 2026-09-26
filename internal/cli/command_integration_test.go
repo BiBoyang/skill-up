@@ -120,6 +120,29 @@ func TestValidateCommandStrictPromotesSkillWarnings(t *testing.T) {
 	}
 }
 
+func TestValidateCommandStrictAcceptsTrickyButValidSkill(t *testing.T) {
+	var logBuf bytes.Buffer
+	restore := logging.SetOutputForTest(&logBuf)
+	defer restore()
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("strict", true, "")
+	cmd.SetContext(context.Background())
+
+	output, err := captureStdout(t, func() error {
+		return validateCmd.RunE(cmd, []string{"testdata/skill-integrity/valid-tricky-skill/evals/eval.yaml"})
+	})
+	if err != nil {
+		t.Fatalf("validate RunE returned error: %v", err)
+	}
+	if !strings.Contains(output, "eval.yaml is valid") {
+		t.Fatalf("validate output = %q, want success message", output)
+	}
+	if strings.Contains(logBuf.String(), "skill integrity") {
+		t.Fatalf("validate produced unexpected skill integrity warnings:\n%s", logBuf.String())
+	}
+}
+
 func TestListCasesCommandRunEPrintsDefaultsAndTruncatesPrompt(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())

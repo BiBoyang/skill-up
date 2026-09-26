@@ -173,8 +173,10 @@ and prints one warning per finding — without changing the exit code:
 - SKILL.md opens with a closed YAML frontmatter block (`---` fences)
 - the frontmatter declares non-empty `name` and `description` fields
 - every `references/`, `assets/`, `scripts/` path cited in the markdown body
-  exists on disk (paths inside fenced code blocks are treated as
-  documentation examples and ignored)
+  exists on disk. The body is parsed as CommonMark: prose citations, local
+  link/image destinations, and inline code spans that cite a path are checked,
+  while code blocks, remote URLs, and raw HTML are ignored as documentation
+  examples or external resources
 
 Pass `--strict` to promote these warnings to validation failures (exit 1).
 

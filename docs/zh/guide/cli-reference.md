@@ -146,8 +146,9 @@ skill-up validate ./evals/eval.yaml
 
 - SKILL.md 以闭合的 YAML frontmatter（`---` 围栏）开头
 - frontmatter 中 `name`、`description` 字段非空
-- 正文中引用的 `references/`、`assets/`、`scripts/` 相对路径在磁盘上存在
-  （围栏代码块中的路径视为文档示例，不参与检查）
+- 正文中引用的 `references/`、`assets/`、`scripts/` 相对路径在磁盘上存在。
+  正文按 CommonMark 解析：正文行文、本地链接/图片目标、以及引用路径的行内代码
+  均参与检查；代码块、远程 URL 和原始 HTML 视为文档示例或外部资源，不参与检查
 
 传入 `--strict` 可将这些 warning 提升为校验失败（退出码 1）。
 
