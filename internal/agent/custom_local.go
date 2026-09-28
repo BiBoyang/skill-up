@@ -121,13 +121,14 @@ func (t *localTransport) run(ctx context.Context, rt Runtime, opts ExecOptions, 
 // maybeSynthesizeTimeoutOutput writes a minimal session-result when a deadline
 // kill left no output file behind — per-case artifact collection would
 // otherwise find nothing for the run (the agent's early-turn transcript dies
-// with the process). Returns the (possibly new) payload and whether the output
-// file exists afterwards.
+// with the process). A stdout fallback that carries a usable result is kept
+// as-is; only runs with nothing gradable get the synthesized payload.
 func (t *localTransport) maybeSynthesizeTimeoutOutput(readCtx context.Context, rt Runtime, custom *customengine.Config, outputFile string, outputFileProduced bool, execErr error, prep *customRunPrep, raw string) (string, bool) {
 	if execErr == nil || outputFileProduced || outputFile == "" ||
 		custom.Local.OutputFile == "" ||
 		customResponseFormat(custom) != customResponseSessionJSON ||
-		!errors.Is(execErr, context.DeadlineExceeded) {
+		!errors.Is(execErr, context.DeadlineExceeded) ||
+		usableSessionResult(raw) {
 		return raw, outputFileProduced
 	}
 	return t.a.synthesizeTimeoutOutput(readCtx, rt, outputFile, prep)

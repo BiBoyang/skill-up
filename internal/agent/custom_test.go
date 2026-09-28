@@ -1318,3 +1318,45 @@ func TestCustomAgent_RunLocal_TimeoutSynthesizesOutputFile(t *testing.T) {
 		t.Fatalf("synthesized payload = {exit:%d, stderr:%q}, want exit 124 and a synthesized marker", parsed.ExitCode, parsed.Stderr)
 	}
 }
+
+func TestCustomAgent_RunLocal_TimeoutPreservesUsableStdoutResult(t *testing.T) {
+	t.Parallel()
+	rt := newCustomTestRuntime(t)
+	// The engine prints a valid session result to stdout and then hangs past
+	// the deadline without writing its output file — the stdout fallback is
+	// usable and must be preserved, not replaced by an empty synthesized
+	// payload (base behavior).
+	artifactDir := t.TempDir()
+	ag := customLocalAgent(&config.CustomEngineConfig{
+		Transport:      "local",
+		TimeoutSeconds: 1,
+		Local: &config.CustomLocalConfig{
+			Command:    "sh",
+			Args:       []string{"-c", `printf '%s' '{"engine":"my-agent","exit_code":0,"final_message":"useful partial answer","input_tokens":42}'; sleep 30`},
+			OutputFile: "${output_file}",
+		},
+	})
+
+	res, err := ag.Run(context.Background(), rt, ExecOptions{ArtifactDir: artifactDir}, userMessages())
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if res == nil {
+		t.Fatal("expected a recovered session result")
+	}
+	if res.FinalMessage != "useful partial answer" {
+		t.Fatalf("res.FinalMessage = %q, want the stdout answer preserved", res.FinalMessage)
+	}
+	if res.InputTokens != 42 {
+		t.Fatalf("res.InputTokens = %d, want the stdout usage preserved", res.InputTokens)
+	}
+	if res.ExitCode == 0 {
+		t.Fatal("an interrupted run must not be graded a success even with exit_code 0 in the payload")
+	}
+	if strings.Contains(res.Stderr, "synthesized") {
+		t.Fatalf("res.Stderr = %q, want no synthesized marker when stdout carried a usable result", res.Stderr)
+	}
+	if _, err := os.Stat(filepath.Join(artifactDir, "session-result.json")); err == nil {
+		t.Fatal("no synthesized result must be archived when stdout carried a usable result")
+	}
+}

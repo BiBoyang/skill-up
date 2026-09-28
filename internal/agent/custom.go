@@ -535,6 +535,25 @@ func (a *CustomAgent) synthesizeTimeoutOutput(ctx context.Context, rt Runtime, o
 	return string(data), true
 }
 
+// usableSessionResult reports whether raw is a payload the run can be graded
+// from. It mirrors the acceptance conditions of parseSessionResult —
+// non-empty, valid JSON, exit_code present — as a side-effect-free probe, so
+// a stdout fallback that carries a real result is never discarded in favor
+// of a synthesized one. It is deliberately a lower bar than full parsing:
+// payloads that pass here but fail deeper validation still take the normal
+// error path, which is the base behavior for a run that did produce output.
+func usableSessionResult(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false
+	}
+	var parsed parsedSessionResult
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return false
+	}
+	return parsed.ExitCode != nil
+}
+
 // parsedSessionResult mirrors the SessionResult JSON contract but keeps
 // exit_code as a pointer so a missing field can be distinguished from 0.
 type parsedSessionResult struct {
