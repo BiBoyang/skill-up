@@ -166,9 +166,16 @@ The validator checks that:
 - All required fields are present
 - Field values are within the allowed range
 
-When the eval config lives inside a skill directory (a `SKILL.md` exists at
-the skill root), `validate` additionally checks the skill's content integrity
-and prints one warning per finding — without changing the exit code:
+### Skill content check (`--skill`)
+
+```bash
+skill-up validate --skill <path to skill directory>
+```
+
+Lints the content integrity of a single skill as authored on disk. It is a
+source-level check: it does not see what a run actually installs after
+`skills.include`/`skills.exclude` filtering, and it does not run automatically
+before evaluations. Findings print one warning per item:
 
 - SKILL.md opens with a closed YAML frontmatter block (`---` fences)
 - the frontmatter declares non-empty `name` and `description` fields
@@ -178,7 +185,16 @@ and prints one warning per finding — without changing the exit code:
   while code blocks, remote URLs, and raw HTML are ignored as documentation
   examples or external resources
 
-Pass `--strict` to promote these warnings to validation failures (exit 1).
+A directory passed via `--skill` that has no SKILL.md is itself a finding.
+Pass `--strict` to promote warnings to failures (exit 1); without it the
+command exits 0 and only prints warnings. `--skill` cannot be combined with
+a positional eval.yaml path.
+
+On success:
+
+```text
+✓ skill content check passed (./skills/my-skill)
+```
 
 ---
 
