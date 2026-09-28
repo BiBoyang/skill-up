@@ -19,11 +19,12 @@ import (
 
 // skillRefPattern matches references/, assets/, scripts/ paths cited in
 // markdown prose — the conventional Agent Skill attachment directories. A
-// match must start at a boundary (the beginning of a text segment, or after a
-// character that cannot be part of a URL, a home-dir path, or a longer path)
-// and ends on a word character so trailing sentence punctuation (.,;:!?。)
-// and closing brackets are never captured. Group 1 is the path.
-var skillRefPattern = regexp.MustCompile(`(?:^|[^\w./~-])((?:references|assets|scripts)/[\w](?:[\w./-]*[\w])?)`)
+// match must start at a boundary (the beginning of a text segment, after a
+// character that cannot be part of a URL, a home-dir path, or a longer path,
+// or after an explicit ./ prefix) and ends on a word character so trailing
+// sentence punctuation (.,;:!?。) and closing brackets are never captured.
+// Group 1 is the path.
+var skillRefPattern = regexp.MustCompile(`(?:^|[^\w./~-]|\./)((?:references|assets|scripts)/[\w](?:[\w./-]*[\w])?)`)
 
 // skillRefPrefixes are the attachment directories a citation must point into.
 var skillRefPrefixes = []string{"references/", "assets/", "scripts/"}
@@ -34,15 +35,17 @@ var linkSchemePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*:`)
 // CheckSkillIntegrity inspects the SKILL.md of the skill rooted at skillDir
 // and returns one human-readable warning per finding: a missing or
 // unterminated YAML frontmatter block, an empty name or description field,
-// and references/, assets/, scripts/ paths cited in the markdown body that do
-// not exist on disk. The body is parsed as CommonMark, so only real citations
-// are collected — prose text, local link and image destinations, and inline
+// references/, assets/, scripts/ paths cited in the markdown body that do not
+// exist on disk, and files under those directories that are never cited in
+// the body. The body is parsed as CommonMark, so only real citations are
+// collected — prose text, local link and image destinations, and inline
 // code spans that cite a path. Code blocks, remote URLs, and raw HTML are
 // never treated as references.
 //
 // It returns nil when skillDir has no SKILL.md (the directory is not a skill
 // root, so there is nothing to check). Every finding is a warning; callers
-// decide whether to tolerate or enforce them (skill-up validate --strict).
+// decide whether to tolerate or enforce them (skill-up validate --skill
+// --strict).
 func CheckSkillIntegrity(skillDir string) []string {
 	data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -70,6 +73,9 @@ func CheckSkillIntegrity(skillDir string) []string {
 
 	for _, ref := range missingSkillRefs(skillDir, body) {
 		warnings = append(warnings, fmt.Sprintf("SKILL.md: references %q but it does not exist on disk", ref))
+	}
+	for _, file := range uncitedSkillFiles(skillDir, body) {
+		warnings = append(warnings, fmt.Sprintf("SKILL.md: never references %q but the file exists on disk", file))
 	}
 
 	return warnings
@@ -119,6 +125,63 @@ func missingSkillRefs(skillDir string, body []byte) []string {
 	}
 	slices.Sort(missing)
 	return missing
+}
+
+// uncitedSkillFiles returns the sorted files that exist under the skill's
+// attachment directories (references/, assets/, scripts/, recursively) but
+// are never cited in body. A citation that names a directory (references/
+// or references/advanced/) covers every file beneath it. Dotfiles and
+// dot-directories (.DS_Store, .gitkeep, .git/) are local metadata and are
+// never reported. The reverse direction matters because truncating the tail
+// of SKILL.md silently turns the attachments it cited into orphans.
+func uncitedSkillFiles(skillDir string, body []byte) []string {
+	cited := extractSkillRefs(body)
+	citedSet := make(map[string]struct{}, len(cited))
+	for _, ref := range cited {
+		citedSet[ref] = struct{}{}
+	}
+
+	var orphans []string
+	for _, dir := range skillRefPrefixes {
+		root := filepath.Join(skillDir, filepath.FromSlash(dir))
+		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil //nolint:nilerr // absent or unreadable attachment directory: no files to report
+			}
+			if d.IsDir() {
+				if path != root && strings.HasPrefix(d.Name(), ".") {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if strings.HasPrefix(d.Name(), ".") {
+				return nil
+			}
+			// path is always under skillDir-relative root, so Rel cannot
+			// fail in practice.
+			rel, _ := filepath.Rel(skillDir, path)
+			if !isCitedAttachment(filepath.ToSlash(rel), citedSet) {
+				orphans = append(orphans, filepath.ToSlash(rel))
+			}
+			return nil
+		})
+	}
+	slices.Sort(orphans)
+	return orphans
+}
+
+// isCitedAttachment reports whether rel is cited directly or lives under a
+// cited attachment directory.
+func isCitedAttachment(rel string, cited map[string]struct{}) bool {
+	if _, ok := cited[rel]; ok {
+		return true
+	}
+	for ref := range cited {
+		if strings.HasPrefix(rel, strings.TrimSuffix(ref, "/")+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // extractSkillRefs returns the references/, assets/, scripts/ paths cited in
@@ -173,12 +236,14 @@ func extractSkillRefs(body []byte) []string {
 
 // localSkillRef converts a link or image destination into a skill-local
 // attachment path. ok is false for remote URLs, pure anchors, and
-// destinations outside references/, assets/, scripts/.
+// destinations outside references/, assets/, scripts/. A leading ./ is
+// normalized away.
 func localSkillRef(dest []byte) (string, bool) {
 	s := string(dest)
 	if i := strings.IndexAny(s, "#?"); i >= 0 {
 		s = s[:i]
 	}
+	s = strings.TrimPrefix(s, "./")
 	if s == "" || strings.HasPrefix(s, "//") || linkSchemePattern.MatchString(s) || !hasRefPrefix(s) {
 		return "", false
 	}
@@ -189,7 +254,7 @@ func localSkillRef(dest []byte) (string, bool) {
 // starts with one of the attachment directory prefixes.
 func citesRefPath(s string) bool {
 	if fields := strings.Fields(s); len(fields) > 0 {
-		return hasRefPrefix(fields[0])
+		return hasRefPrefix(strings.TrimPrefix(fields[0], "./"))
 	}
 	return false
 }

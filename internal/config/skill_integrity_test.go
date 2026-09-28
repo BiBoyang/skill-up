@@ -86,6 +86,26 @@ func TestCheckSkillIntegrity(t *testing.T) {
 	}
 }
 
+func TestCheckSkillIntegrityUncitedAttachmentFixture(t *testing.T) {
+	t.Parallel()
+
+	// The fixture cites references/guide.md only; every other attachment
+	// file must be reported in sorted order, except the .gitkeep dotfile.
+	got := CheckSkillIntegrity("testdata/skill-integrity/orphan-attachment")
+	want := []string{
+		`never references "assets/unused-diagram.png" but the file exists on disk`,
+		`never references "references/uncited-notes.md" but the file exists on disk`,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("CheckSkillIntegrity() = %v, want %d warning(s): %v", got, len(want), want)
+	}
+	for i, wantSub := range want {
+		if !strings.Contains(got[i], wantSub) {
+			t.Errorf("warning[%d] = %q, want substring %q", i, got[i], wantSub)
+		}
+	}
+}
+
 func TestCheckSkillIntegrityMarkdownEdgesWithMissingRef(t *testing.T) {
 	t.Parallel()
 
@@ -118,6 +138,55 @@ Details live in references/missing.md.
 	got := CheckSkillIntegrity(dir)
 	if len(got) != 1 || !strings.Contains(got[0], `"references/missing.md"`) {
 		t.Fatalf("CheckSkillIntegrity() = %v, want exactly one warning for references/missing.md", got)
+	}
+}
+
+func TestCheckSkillIntegrityOrphanEdges(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	skillMD := `---
+name: orphan-edges
+description: Exercises the uncited-attachment corner cases.
+---
+
+Browse [the docs](references/advanced) or run ` + "`scripts/main.sh`" + `.
+The icon lives at ./assets/slashy.png.
+`
+	files := map[string]string{
+		"SKILL.md":                       skillMD,
+		"references/advanced/covered.md": "# Covered by the cited directory\n",
+		"references/lonely.md":           "# Uncited top-level file\n",
+		"references/.hidden/skipped.md":  "# Inside a dot directory\n",
+		"assets/slashy.png":              "cited with a ./ prefix\n",
+		"assets/sub/nested.png":          "uncited nested asset\n",
+		"assets/other.bin":               "uncited flat asset\n",
+		"assets/.DS_Store":               "metadata\n",
+		"scripts/main.sh":                "echo cited\n",
+	}
+	for rel, content := range files {
+		abs := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := CheckSkillIntegrity(dir)
+	want := []string{
+		`never references "assets/other.bin" but the file exists on disk`,
+		`never references "assets/sub/nested.png" but the file exists on disk`,
+		`never references "references/lonely.md" but the file exists on disk`,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("CheckSkillIntegrity() = %v, want %d warning(s): %v", got, len(want), want)
+	}
+	for i, wantSub := range want {
+		if !strings.Contains(got[i], wantSub) {
+			t.Errorf("warning[%d] = %q, want substring %q", i, got[i], wantSub)
+		}
 	}
 }
 
@@ -176,6 +245,11 @@ func TestExtractSkillRefsProse(t *testing.T) {
 			want: []string{"references/a.md"},
 		},
 		{
+			name: "dot-slash prefixed prose path is a reference",
+			body: "See ./assets/icon.png for the icon.",
+			want: []string{"assets/icon.png"},
+		},
+		{
 			name: "bare URL in prose is ignored",
 			body: "Mirror at https://example.com/assets/icon.png for reference.",
 			want: nil,
@@ -232,6 +306,11 @@ func TestExtractSkillRefsCodeConstructs(t *testing.T) {
 			body: "Run `scripts/run.sh --verbose` to execute.",
 			want: []string{"scripts/run.sh"},
 		},
+		{
+			name: "inline code span with dot-slash prefix is a reference",
+			body: "Copy `./assets/template.txt` first.",
+			want: []string{"assets/template.txt"},
+		},
 	})
 }
 
@@ -253,6 +332,11 @@ func TestExtractSkillRefsLinks(t *testing.T) {
 			name: "local link destination is a reference",
 			body: "[guide](references/guide.md)",
 			want: []string{"references/guide.md"},
+		},
+		{
+			name: "dot-slash prefixed link destination is a reference",
+			body: "[icon](./assets/icon.png)",
+			want: []string{"assets/icon.png"},
 		},
 		{
 			name: "local link destination with anchor is a reference",
