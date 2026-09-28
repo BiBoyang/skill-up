@@ -1265,12 +1265,14 @@ EOF`,
 	}
 }
 
-func TestCustomAgent_RunLocal_TimeoutSynthesizesOutputFile(t *testing.T) {
+func TestCustomAgent_RunLocal_TimeoutSynthesizesArchivedResult(t *testing.T) {
 	t.Parallel()
 	rt := newCustomTestRuntime(t)
 	// The engine hangs without ever writing its output file — a deadline kill
-	// must leave a synthesized session-result behind so per-case artifact
-	// collection still finds something to persist.
+	// must leave a synthesized session-result archived in the per-case
+	// artifact directory, and nothing masquerading as engine output inside
+	// the runtime workspace.
+	artifactDir := t.TempDir()
 	ag := customLocalAgent(&config.CustomEngineConfig{
 		Transport:      "local",
 		TimeoutSeconds: 1,
@@ -1281,7 +1283,7 @@ func TestCustomAgent_RunLocal_TimeoutSynthesizesOutputFile(t *testing.T) {
 		},
 	})
 
-	res, err := ag.Run(context.Background(), rt, ExecOptions{}, userMessages())
+	res, err := ag.Run(context.Background(), rt, ExecOptions{ArtifactDir: artifactDir}, userMessages())
 	if err == nil {
 		t.Fatal("expected a timeout error")
 	}
@@ -1294,18 +1296,17 @@ func TestCustomAgent_RunLocal_TimeoutSynthesizesOutputFile(t *testing.T) {
 	if !strings.Contains(res.Stderr, "synthesized") {
 		t.Fatalf("res.Stderr = %q, want it to name the artifact as synthesized", res.Stderr)
 	}
-	if !containsBasename(res.Artifacts.GeneratedFileSources, "session-result.json") {
-		t.Fatalf("generated_file_sources = %v, want the synthesized session-result.json registered for artifact collection and diff exclusion", res.Artifacts.GeneratedFileSources)
+	if containsBasename(res.Artifacts.GeneratedFileSources, "session-result.json") {
+		t.Fatalf("generated_file_sources = %v, want the synthesized result kept out of workspace diff exclusion", res.Artifacts.GeneratedFileSources)
 	}
-	// The file must exist in the runtime with parseable content — downstream
-	// tooling reads it like any engine output.
-	tmpName := filepath.Join(t.TempDir(), "synth-check.json")
-	if err := rt.DownloadFile(context.Background(), "outputs/session-result.json", tmpName); err != nil {
-		t.Fatalf("download synthesized output: %v", err)
+	if len(res.Artifacts.GeneratedFiles) != 0 {
+		t.Fatalf("generated_files = %v, want the synthesized result kept out of the judge-facing artifact list", res.Artifacts.GeneratedFiles)
 	}
-	data, err := os.ReadFile(tmpName)
+	// The archival copy must exist in the case artifact directory with
+	// parseable content — this is the file per-case inspection reads.
+	data, err := os.ReadFile(filepath.Join(artifactDir, "session-result.json"))
 	if err != nil {
-		t.Fatalf("read synthesized output: %v", err)
+		t.Fatalf("read archived synthesized result: %v", err)
 	}
 	var parsed struct {
 		ExitCode int    `json:"exit_code"`
@@ -1316,6 +1317,11 @@ func TestCustomAgent_RunLocal_TimeoutSynthesizesOutputFile(t *testing.T) {
 	}
 	if parsed.ExitCode != 124 || !strings.Contains(parsed.Stderr, "synthesized") {
 		t.Fatalf("synthesized payload = {exit:%d, stderr:%q}, want exit 124 and a synthesized marker", parsed.ExitCode, parsed.Stderr)
+	}
+	// The runtime workspace must stay untouched — no fake engine output.
+	tmpName := filepath.Join(t.TempDir(), "workspace-check.json")
+	if err := rt.DownloadFile(context.Background(), "outputs/session-result.json", tmpName); err == nil {
+		t.Fatal("synthesized result must not be written into the runtime workspace")
 	}
 }
 
@@ -1358,5 +1364,87 @@ func TestCustomAgent_RunLocal_TimeoutPreservesUsableStdoutResult(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(artifactDir, "session-result.json")); err == nil {
 		t.Fatal("no synthesized result must be archived when stdout carried a usable result")
+	}
+}
+
+func TestCustomAgent_RunLocal_TimeoutGarbageStdoutStillSynthesizes(t *testing.T) {
+	t.Parallel()
+	rt := newCustomTestRuntime(t)
+	// Garbage on stdout is not a usable result: synthesis still applies.
+	artifactDir := t.TempDir()
+	ag := customLocalAgent(&config.CustomEngineConfig{
+		Transport:      "local",
+		TimeoutSeconds: 1,
+		Local: &config.CustomLocalConfig{
+			Command:    "sh",
+			Args:       []string{"-c", "echo not-json-at-all; sleep 30"},
+			OutputFile: "${output_file}",
+		},
+	})
+
+	res, err := ag.Run(context.Background(), rt, ExecOptions{ArtifactDir: artifactDir}, userMessages())
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if res == nil || res.ExitCode != 124 || !strings.Contains(res.Stderr, "synthesized") {
+		t.Fatalf("res = %+v, want a synthesized result (exit 124, synthesized marker)", res)
+	}
+	if _, err := os.Stat(filepath.Join(artifactDir, "session-result.json")); err != nil {
+		t.Fatalf("archived synthesized result missing: %v", err)
+	}
+}
+
+func TestCustomAgent_RunLocal_TimeoutSynthesizesWithoutArtifactDir(t *testing.T) {
+	t.Parallel()
+	rt := newCustomTestRuntime(t)
+	// No output directory configured: nothing can be archived, but the
+	// payload itself must still reach the result.
+	ag := customLocalAgent(&config.CustomEngineConfig{
+		Transport:      "local",
+		TimeoutSeconds: 1,
+		Local: &config.CustomLocalConfig{
+			Command:    "sh",
+			Args:       []string{"-c", "sleep 30"},
+			OutputFile: "${output_file}",
+		},
+	})
+
+	res, err := ag.Run(context.Background(), rt, ExecOptions{}, userMessages())
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if res == nil || res.ExitCode != 124 || !strings.Contains(res.Stderr, "synthesized") {
+		t.Fatalf("res = %+v, want the synthesized payload even without an artifact dir", res)
+	}
+	if containsBasename(res.Artifacts.GeneratedFileSources, "session-result.json") {
+		t.Fatalf("generated_file_sources = %v, want no synthesized entries", res.Artifacts.GeneratedFileSources)
+	}
+}
+
+func TestCustomAgent_RunLocal_TimeoutArchiveFailureKeepsPayload(t *testing.T) {
+	t.Parallel()
+	rt := newCustomTestRuntime(t)
+	// ArtifactDir points at a regular file, so the archival write fails —
+	// the payload must still be returned and graded.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := customLocalAgent(&config.CustomEngineConfig{
+		Transport:      "local",
+		TimeoutSeconds: 1,
+		Local: &config.CustomLocalConfig{
+			Command:    "sh",
+			Args:       []string{"-c", "sleep 30"},
+			OutputFile: "${output_file}",
+		},
+	})
+
+	res, err := ag.Run(context.Background(), rt, ExecOptions{ArtifactDir: blocker}, userMessages())
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if res == nil || res.ExitCode != 124 || !strings.Contains(res.Stderr, "synthesized") {
+		t.Fatalf("res = %+v, want the synthesized payload preserved when archival fails", res)
 	}
 }

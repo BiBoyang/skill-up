@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- When a custom engine is killed by the case deadline before writing its
+  session result (and stdout carries no usable result), skill-up synthesizes
+  a minimal `session-result.json` with `exit_code` 124 and a stderr marker,
+  and archives it directly into the per-case output directory at
+  `outputs/agent/run/session-result.json`. The runtime workspace is never
+  given a synthesized copy, and the file is not exposed to judges. A stdout
+  fallback that parses as a session result is preserved instead of being
+  replaced (an interrupted run still fails, with its exit code coerced
+  non-zero).
 - Add an experimental DeepSeek Harness plugin bundle that exposes structured
   validation, background evaluation, and report-summary tools together with
   the canonical `skill-upper` Skill for evidence-based Skill iteration.

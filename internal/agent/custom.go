@@ -502,20 +502,20 @@ func (a *CustomAgent) readRawResult(ctx context.Context, rt Runtime, custom *cus
 	return string(data), true
 }
 
-// synthesizeTimeoutOutput writes a minimal session-result JSON to the engine's
-// configured output path after a deadline kill left no file behind, and
-// returns the payload so the caller can grade it like any engine output. The
-// payload keeps the documented contract (exit_code always present) with a
-// stderr marker naming it as synthesized; transcripts and usage stay empty
-// because the killed process took them with it. Path safety mirrors
-// readRawResult: workspacePath re-validates the target against symlinks the
-// engine may have created between run start and the kill.
-func (a *CustomAgent) synthesizeTimeoutOutput(ctx context.Context, rt Runtime, outputFile string, prep *customRunPrep) (string, bool) {
-	safe, err := workspacePath(rt, outputFile)
-	if err != nil {
-		logging.WarnContextf(ctx, "CustomAgent: refusing to synthesize timeout output at %s: %v", outputFile, err)
-		return "", false
-	}
+// synthesizeTimeoutOutput builds a minimal session-result JSON for a run
+// killed by the case deadline before the engine wrote any result, and
+// archives it into the per-case artifact directory (agent/run/, prepared by
+// the evaluator before the run) as session-result.json. The payload keeps
+// the documented contract (exit_code always present) with a stderr marker
+// naming it as synthesized; transcripts and usage stay empty because the
+// killed process took them with it. The file is written next to the other
+// per-case outputs instead of the runtime workspace: grading consumes the
+// returned payload, and a workspace copy would show up in workspace diffs
+// and collect_artifacts globs as if the engine had written it. When
+// artifactDir is empty (no output directory configured) or the write fails,
+// the payload is still returned — the result itself is the best description
+// of the run; only the archival copy is skipped.
+func (a *CustomAgent) synthesizeTimeoutOutput(ctx context.Context, artifactDir string, prep *customRunPrep) string {
 	payload := map[string]any{
 		"engine":        a.Name(),
 		"exit_code":     124,
@@ -526,13 +526,15 @@ func (a *CustomAgent) synthesizeTimeoutOutput(ctx context.Context, rt Runtime, o
 	data, err := json.Marshal(payload)
 	if err != nil {
 		logging.WarnContextf(ctx, "CustomAgent: cannot encode synthesized timeout output: %v", err)
-		return "", false
+		return ""
 	}
-	if err := persistRuntimeArtifact(ctx, rt, safe, string(data)); err != nil {
-		logging.WarnContextf(ctx, "CustomAgent: cannot write synthesized timeout output %s: %v", safe, err)
-		return "", false
+	if artifactDir == "" {
+		return string(data)
 	}
-	return string(data), true
+	if _, err := writeLocalArtifact(artifactDir, "session-result.json", string(data)); err != nil {
+		logging.WarnContextf(ctx, "CustomAgent: cannot archive synthesized timeout result into %s: %v", artifactDir, err)
+	}
+	return string(data)
 }
 
 // usableSessionResult reports whether raw is a payload the run can be graded
