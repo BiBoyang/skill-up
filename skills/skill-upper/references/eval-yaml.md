@@ -24,7 +24,7 @@ skills:
     exclude: [".qoder/repowiki/**"]                     # Optional; exclude takes priority
 
 engine:
-  name: claude_code               # claude_code | codex | qodercli (qoder-cli also accepted)
+  name: claude_code               # claude_code | codex | opencode | qodercli (qoder-cli also accepted) | qwen_code
   model:
     provider: anthropic
     name: claude-sonnet-4-6

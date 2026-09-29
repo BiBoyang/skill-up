@@ -87,7 +87,7 @@ skills:
 
 # ========== 5. Agent Engine ==========
 engine:
-  name: claude_code               # claude_code / codex / qodercli (also accepts qoder-cli) / qwen_code (also accepts qwen-code, qwen)
+  name: claude_code               # claude_code / codex / opencode / qodercli / qwen_code
   version: 2.1.0                  # Optional concrete CLI version; see version lifecycle below
   model:
     provider: anthropic
@@ -640,6 +640,7 @@ Capture semantics:
 | `claude_code` | Yes | `--resume` flag with session ID |
 | `qodercli` | Yes | `-r <session-id>` flag |
 | `codex` | Yes | `codex resume <thread-id>` command |
+| `opencode` | Yes | `opencode run --session <session-id>` |
 | `qwen_code` | Not yet | Falls back to batch mode |
 | `custom` | Opt-in | `conversation_mode: stateful` with `SessionInput.session_id`; otherwise batch mode |
 
@@ -1001,7 +1002,7 @@ skill-up run ./evals/eval.yaml \
 ```
 
 Without `--provider`, the historical `provider/model` form remains supported
-when the prefix is a known or configured provider:
+for existing engines when the prefix is a known or configured provider:
 
 ```bash
 skill-up run ./evals/eval.yaml --engine codex --model openai/gpt-5.4
@@ -1081,6 +1082,65 @@ skill-up run ./evals/eval.yaml --engine qodercli --provider qoder --model 'team/
 
 The provider above only disambiguates CLI parsing; Qoder still owns routing and
 authentication. Configure any custom model in Qoder first.
+
+### OpenCode engine
+
+Set `engine.name: opencode`. With `environment.type: none`, skill-up uses the
+installed local `opencode` command and its existing login. With `docker` or
+`opensandbox`, skill-up installs the `opencode-ai` CLI in the isolated runtime.
+The tested DashScope configuration below works in both modes.
+
+OpenCode receives the model as `provider/model`. An explicit API key is passed
+through the runtime environment; without one, OpenCode uses its own login.
+For OpenCode, `--model org/model` with no provider or base URL is passed through unchanged;
+skill-up does not infer `org` as the provider. To select a provider explicitly,
+use `--provider gateway --model org/model`, which sends `gateway/org/model` to
+OpenCode. `engine.model.provider` works the same way. When only `base_url` is
+configured, the adapter uses `openai/org/model` so the full model ID reaches
+that endpoint.
+`engine.model.base_url` adds a provider endpoint through OpenCode's inline
+configuration. For a custom OpenAI-compatible provider, set its provider ID,
+model name, and base URL. Real and mocked MCP servers are also passed through
+inline configuration without editing the project's `opencode.json`.
+OpenCode returns JSON events, including the session ID, tool calls, response,
+and token usage; multi-turn cases resume with that exact session ID.
+
+OpenCode automatically approves tool permissions for non-interactive runs.
+On `none`, its tools execute with local user permissions. Use `docker` or
+`opensandbox` when the evaluation needs isolation. Sandboxed runs require the
+model endpoint and MCP servers to be reachable from inside the runtime.
+
+#### DashScope OpenAI-compatible endpoint
+
+Configure a provider ID, the upstream model ID, and the endpoint in
+`evals/eval.yaml`:
+
+```yaml
+environment:
+  type: none # Use opensandbox or docker for an isolated run
+engine:
+  name: opencode
+  model:
+    provider: dashscope
+    name: qwen3.8-max
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+```
+
+Supply the API key through `DASHSCOPE_API_KEY` or `--api-key`; keep it out of
+the eval file. With `DASHSCOPE_API_KEY` set in the process environment, run:
+
+```bash
+skill-up run ./evals/eval.yaml
+```
+
+skill-up passes `dashscope/qwen3.8-max` as OpenCode's `--model` value. It injects
+an inline `dashscope` provider with `@ai-sdk/openai-compatible`, the configured
+`baseURL`, and the model ID. The key is referenced through a runtime environment
+variable. Replace the endpoint with the URL for your DashScope region or
+workspace, and use a model that the key can access. The example uses the
+[documented `qwen3.8-max` model ID](https://help.aliyun.com/zh/model-studio/qwen3-8-max).
+For a model ID containing
+slashes, keep the entire ID in `name` (or `--model`); skill-up does not split it.
 
 ### qwen_code credentials
 
