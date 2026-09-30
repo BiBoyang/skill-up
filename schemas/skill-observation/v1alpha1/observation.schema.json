@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/alibaba/skill-up/plugins/skill-up-observer/schemas/observation.schema.json",
-  "title": "Skill Up Observer document v1alpha1",
+  "$id": "https://github.com/alibaba/skill-up/schemas/skill-observation/v1alpha1/observation.schema.json",
+  "title": "Skill Up observation document v1alpha1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -25,7 +25,7 @@
       "additionalProperties": false,
       "required": ["name"],
       "properties": {
-        "name": { "const": "codex" },
+        "name": { "enum": ["codex", "dsh"] },
         "version": { "type": "string" },
         "adapter_version": { "type": "string" }
       }
@@ -83,6 +83,19 @@
       "properties": {
         "sentiment": { "enum": ["positive", "negative", "mixed", "neutral", ""] },
         "comment": { "type": "string" }
+      }
+    },
+    "followups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["turn_id", "text", "observed_at"],
+        "properties": {
+          "turn_id": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1 },
+          "observed_at": { "type": "string", "format": "date-time" }
+        }
       }
     },
     "correlation": {

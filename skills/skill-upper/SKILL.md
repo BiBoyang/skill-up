@@ -1,6 +1,6 @@
 ---
 name: skill-upper
-description: "Capture and review Agent Skill observations, and create, run, diagnose, or iteratively improve Skill evaluations (evals) with the skill-up CLI / 采集和审核 Agent Skill 观察，并使用 skill-up CLI 创建、运行、诊断或持续改进 Skill 评测. Use when the user asks to record explicitly attributed Skill usage or feedback; review observations; turn an approved observation into a regression case; evaluate, test, regress, verify, fix, improve, iterate, or evolve a Skill; add or strengthen eval cases; write eval.yaml/case.yaml; run skill-up run/validate/list-cases/report/import/init; or migrate from Anthropic evals.json. Observation capture and review currently require the Codex observer plugin; evaluation remains multi-engine."
+description: "Capture and review Agent Skill observations, and create, run, diagnose, or iteratively improve Skill evaluations (evals) with the skill-up CLI. Use when the user asks to record explicitly attributed Skill usage or feedback; review observations; turn an approved observation into a regression case; evaluate, test, regress, verify, fix, improve, iterate, or evolve a Skill; add or strengthen eval cases; write eval.yaml/case.yaml; run skill-up run/validate/list-cases/report/import/init; or migrate from Anthropic evals.json. Observation capture and review require either the Codex skill-up plugin or an observer-enabled DSH skill-up plugin; evaluation remains multi-engine."
 ---
 
 # use-skill-up-cli
@@ -15,7 +15,7 @@ Manual: <https://alibaba.github.io/skill-up/>
 
 Detection rules (highest priority first):
 
-1. The user explicitly specifies a language in the current message (e.g. "answer in English" / "用中文回答") → follow the user's instruction.
+1. The user explicitly specifies a language in the current message (e.g. "answer in English" or "reply in Chinese") → follow the user's instruction.
 2. The natural language used in the user's current message → match it.
 3. None of the above → use English (default).
 
@@ -27,12 +27,12 @@ When creating or editing `eval.yaml`, `case.yaml`, grading scripts, README snipp
 
 - If the user asks in Chinese, write the final response and all generated natural-language content in Chinese, including YAML comments, `title`, `description`, `input.prompt`, `expect` keywords, and `judge.criteria`.
 - If the user asks in English, write the final response and all generated natural-language content in English, including YAML comments, `title`, `description`, `input.prompt`, `expect` keywords, and `judge.criteria`; do not leave Chinese or CJK characters in generated case files.
-- If the target Skill itself is written in Chinese but the user asks in English, translate the Skill's functional intent into English test prompts and assertions instead of copying Chinese prose from the target Skill or templates.
-- In an English context, deterministic keywords in `rule_based` cases, including `expect.must_contain` and `judge.success.output_contains`, must also be English keywords. Translate terms such as `资源泄漏`, `关闭`, and `异常处理` into `resource leak`, `close`, and `exception handling`; do not write bilingual parentheticals like `"资源" (resources)`.
+- If the target Skill itself is written in Chinese but the user asks in English, translate the Skill's functional intent into English test prompts and assertions instead of copying Chinese prose from the target Skill.
+- In an English context, deterministic keywords in `rule_based` cases, including `expect.must_contain` and `judge.success.output_contains`, must also be English keywords. Express concepts such as resource leaks, closing resources, and exception handling in English; do not mix source-language terms into English assertions.
 - Keep technical identifiers unchanged, such as `schema_version`, `environment.type`, `engine.name`, `rule_based`, `agent_judge`, `script_path`, file paths, and commands.
 - Generated YAML comments must use field-leading comments. Keep each comment short: one line for field meaning, plus one line for options only when useful.
 - When listing options in comments, keep enum values unchanged, such as `none | opensandbox | docker` and `rule_based | agent_judge | script`.
-- Treat `assets/*.tmpl` as structural references only. Rewrite placeholder prose and comments into the current output language; in an English context, translate or remove every Chinese comment and Chinese placeholder before writing generated files.
+- Treat `assets/*.tmpl` as structural references only. Replace placeholder prose and comments with case-specific content in the current output language. The bundled templates are in English; translate their prose and comments when the user requests another language.
 - `skill-up import` uses the CLI conversion path and does not preserve template comments; do not promise commented YAML for import-generated files.
 - In an English context, after generating all files but BEFORE submitting the final reply, you **MUST perform a CJK self-check**: open every `evals/cases/*.yaml` and `evals/eval.yaml` and scan for CJK characters (Unicode ranges `\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u3000-\u303f\uff00-\uffef`), including but not limited to `title`, `description`, `input.prompt`, `expect` keywords, `judge.criteria`, and YAML comments. If any CJK character is found, **replace it with an equivalent English expression before finishing the task**. This step is mandatory and must not be skipped.
 
@@ -71,27 +71,36 @@ Use this skill in any of the following situations:
 ### Observation capture mode (optional)
 
 Use this mode when the user asks to record the current Skill interaction or
-feedback and the plugin's `skill_up_observer` MCP tools are available. It
-requires a current Codex release with plugin and lifecycle-hook support; do not
-retrofit it onto the pinned Codex 0.80.0 evaluation adapter.
+feedback and observation tools are available. It requires either a current
+Codex release with the `codex-skill-up` plugin and lifecycle-hook support, or DSH with
+the skill-up plugin's observer explicitly enabled. Do not retrofit observation
+capture onto the pinned Codex 0.80.0 evaluation adapter.
 
-Observation capture and review are currently **Codex-only**. Claude Code,
-qodercli, Qwen Code, and other Agent Engines are not supported for this
-observation workflow. This restriction does not apply to normal `skill-up`
+If the user asks how to install either host plugin, or the required observation
+tools are missing and the user asks to enable them, read
+`references/install.md` under "Install an observation host plugin (optional)". Do not
+install or enable a plugin unless the user asks.
+
+Claude Code, qodercli, Qwen Code, and other Agent Engines are not supported for
+this observation workflow. This restriction does not apply to normal `skill-up`
 evaluation runs, which remain multi-engine.
 
 1. Attribute the interaction only when the user explicitly references a Skill
    (for example, `$my-skill`) or the responsible Skill is otherwise known with
    certainty.
-2. If explicit attribution is absent but certain, call
-   `mark_skill_invocation` once with the Skill name and optional version.
-3. Use `attach_skill_evidence` only for references that help reproduce or
+2. In Codex, if explicit attribution is absent but certain, call
+   `mark_skill_invocation` once with the Skill name and optional version. DSH
+   derives exact attribution from its durable `/skill` injection or successful
+   `skill` tool result; do not add inferred attribution.
+3. In Codex, use `attach_skill_evidence` only for references that help reproduce or
    evaluate the behavior. Prefer paths and short summaries over copied file
    contents.
-4. Use `record_skill_feedback` when the user provides feedback. Never invent
-   sentiment or comments.
+4. In Codex, use `record_skill_feedback` during the observed turn. In DSH,
+   the observer stores the next user turn in the same session as an unclassified
+   follow-up candidate. For explicit feedback, use `record_observation_feedback`
+   with the completed observation's ID. Never invent sentiment or comments.
 
-Hooks redact common credential shapes before local persistence, but still
+Both adapters redact common credential shapes before local persistence, but still
 avoid sending secrets to marker tools. If the request is capture-only, stop
 after recording it; do not edit, evaluate, commit, or publish a Skill unless
 the user also asks for that work.
@@ -99,7 +108,7 @@ the user also asks for that work.
 ### Observation input mode (optional)
 
 When the request starts from a captured Skill observation, read
-`references/observations.md` first. Use the plugin's `skill_up_observer` MCP tools to
+`references/observations.md` first. Use the available observation tools to
 inspect and preview the observation, require explicit approval for the exact
 candidate, write it only after approval, and then continue at Step 4. If the
 request does not start from an observation, use the normal flow below.
@@ -128,7 +137,8 @@ curl -fsSL https://raw.githubusercontent.com/alibaba/skill-up/main/install.sh | 
 
 After installing, run `skill-up --version` again. If the command is still missing, add `~/.local/bin` to `PATH`.
 
-More details: `references/install.md`.
+More details, including optional Codex and DSH observation host plugins:
+`references/install.md`.
 
 ### Step 0.5 (optional): User config and telemetry
 
@@ -157,8 +167,7 @@ Precedence (low → high): embedded empty defaults < user config < project `.ski
 - Copy `assets/eval.yaml.tmpl` to `<skill-root>/evals/eval.yaml`.
 - Copy `assets/case.yaml.tmpl` to `<skill-root>/evals/cases/<case-id>.yaml`.
 
-Adapt language per "Language Rules for Generated Artifacts". In an English context, it is **prohibited** to copy Chinese placeholder text from the templates into generated files — all prose must be rewritten in English. The Chinese in the templates is for structural reference only, not to be carried over.
-Preserve short field-leading comments in generated YAML. In Chinese context, rewrite those comments into Chinese while keeping field names and enum values in English.
+Adapt language per "Language Rules for Generated Artifacts". Replace the templates' generic English placeholders with case-specific prose in the requested output language. Preserve short field-leading comments in generated YAML; translate them when the output language differs from English, while keeping field names and enum values in English.
 
 Selection guidelines:
 
