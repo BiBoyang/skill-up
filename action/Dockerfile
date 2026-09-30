@@ -17,9 +17,10 @@ FROM node:26-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1
 # the image. Keep codex aligned with the codexDefaultVersion skill-up expects.
 ARG CLAUDE_VERSION=2.1.217
 ARG CODEX_VERSION=0.80.0
+ARG OPENCODE_VERSION=1.18.33
 ARG QWEN_CODE_VERSION=0.20.1
-ARG QODER_VERSION=1.1.21
-ARG QODER_SHA256=f979e907faa7ec5d74759c4cf87f2357d4f82eab35dadf98692a5a43c1055cdb
+ARG QODER_VERSION=1.1.41
+ARG QODER_SHA256=1c2d174b098eb472a9ac19a80b89a664fdcb7d37dca09e64f44243faa4e3eca7
 ARG SKILL_UP_VERSION=0.7.0
 ARG SKILL_UP_INSTALL_COMMIT=5ac7ce0467a164d07aacbbf7052bcffda68a446b
 ARG SKILL_UP_INSTALL_SHA256=2b7fbea303dc8b6feb09db6f9cc7307fb9263ff6cc4b0c68cdfe9c2897d109ef
@@ -38,13 +39,16 @@ RUN apt-get update \
 # Agent engines.
 #   claude_code -> @anthropic-ai/claude-code (npm, CLI binary: claude)
 #   codex       -> @openai/codex             (npm, CLI binary: codex)
+#   opencode    -> opencode-ai               (npm, CLI binary: opencode)
 #   qwen_code   -> @qwen-code/qwen-code       (npm, CLI binary: qwen)
 RUN npm install -g \
         "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
         "@openai/codex@${CODEX_VERSION}" \
+        "opencode-ai@${OPENCODE_VERSION}" \
         "@qwen-code/qwen-code@${QWEN_CODE_VERSION}" \
     && claude --version \
     && codex --version \
+    && opencode --version \
     && qwen --version
 
 # qodercli: download the same release validated by extended CI and verify the

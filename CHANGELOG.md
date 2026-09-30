@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failures. The check is source-level and independent from eval config
   validation — it does not see what a run installs after
   `skills.include`/`skills.exclude` filtering.
+- Add an `opencode` Agent Engine for local and isolated runtimes, including
+  CLI installation, JSON event transcripts, multi-turn session resume, and
+  runtime-scoped MCP and provider configuration. OpenCode treats slashed model
+  IDs as opaque when no provider is specified; skill-up does not infer a
+  provider from `--model`.
+- Prepare OpenCode routing and CLI installation in the GitHub Action runner
+  image, with live none-runtime and OpenSandbox model E2E coverage. The
+  published Action image needs a compatible skill-up release before OpenCode
+  is available to Action callers.
+- DSH's opt-in observer now links the next same-session user turn after a
+  single completed Skill use as an unclassified follow-up candidate.
+  `collect_skill_feedback` gathers recent observations and follow-ups for
+  review before proposing a Skill change.
+- Add a code-stats regression case that verifies project source counts exclude dependency directories.
 - Tagged releases now attach self-contained Codex and DeepSeek Harness
   plugin archives assembled with the canonical `skill-upper` source, including
   checksums and attestations without publishing to an external registry. Plugin
@@ -52,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    on POSIX shells.
 
 ### Changed
+- Upgrade the GitHub Action runner image and live model E2E to QoderCLI 1.1.41,
+  and run two QoderCLI self-eval cases concurrently.
+- Publish the canonical `skill-upper` instructions and reference guides in
+  English while retaining the Chinese overview and language-specific eval
+  fixtures.
 - Clarify in the English and Chinese READMEs that the evaluation CLI also
   supports agent-only and workspace evaluations without a Skill, alongside
   the Skill evolution workflow, and place its evaluation loop in the context
@@ -59,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixture uploads.
 
 ### Fixed
+- `SessionInput` no longer carries the `custom.kwargs` map. The local transport
+  writes that payload into the runtime workspace, so the map was readable by
+  the agent under test, bypassing the config-time rule that already rejects
+  `${kwargs}` / `${kwargs_json}` / `${session_input}` in command-line contexts
+  because a kwarg value may be credential-shaped. Wire kwargs explicitly with
+  `${kwargs.<key>}` in `custom.local.args` / `custom.env` /
+  `custom.http.headers`, or with `${kwargs}` in `custom.http.request_body`.
 - DeepSeek Harness plugin tests now use a committed lockfile and an exact
   `0.1.5-rc.2` host peer set, preventing newer release candidates from making
   CI dependency resolution nondeterministic.
