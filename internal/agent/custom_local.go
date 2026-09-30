@@ -96,7 +96,9 @@ func (t *localTransport) run(ctx context.Context, rt Runtime, opts ExecOptions, 
 	// as-is — only runs with nothing gradable get the synthesized payload.
 	// The run still fails via execErr, and the synthesized payload's
 	// exit_code 124 keeps it from being graded a success.
-	raw = t.maybeSynthesizeTimeoutOutput(readCtx, custom, outputFile, outputFileProduced, execErr, prep, opts.ArtifactDir, raw)
+	if execErr != nil && !outputFileProduced {
+		raw = t.maybeSynthesizeTimeoutOutput(readCtx, custom, outputFile, execErr, prep, opts.ArtifactDir, raw)
+	}
 
 	// The framework-written input file is always recorded; the output file only
 	// when it was produced by this run or cleared before it (the "produced or
@@ -126,8 +128,8 @@ func (t *localTransport) run(ctx context.Context, rt Runtime, opts ExecOptions, 
 // agent's early-turn transcript dies with the process). The synthesized file
 // is archived directly into the per-case artifact directory; the runtime
 // workspace is left untouched, so nothing masquerades as engine output there.
-func (t *localTransport) maybeSynthesizeTimeoutOutput(ctx context.Context, custom *customengine.Config, outputFile string, outputFileProduced bool, execErr error, prep *customRunPrep, artifactDir, raw string) string {
-	if execErr == nil || outputFileProduced || outputFile == "" ||
+func (t *localTransport) maybeSynthesizeTimeoutOutput(ctx context.Context, custom *customengine.Config, outputFile string, execErr error, prep *customRunPrep, artifactDir, raw string) string {
+	if outputFile == "" ||
 		custom.Local.OutputFile == "" ||
 		customResponseFormat(custom) != customResponseSessionJSON ||
 		!errors.Is(execErr, context.DeadlineExceeded) ||
