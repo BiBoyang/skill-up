@@ -14,11 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   threshold even when skill-up runs on a Windows host.
 
 ### Added
+- Support explicit `judge.engine` configuration independent of the evaluated agent,
+  reusing engine/model connection resolution and provisioning the judge CLI in
+  isolated runtimes. Detect known judge protocol mismatches before agent execution.
 - Support independent `judges` on one case in the `none` runtime, combining
   reusable script checks and semantic Agent review of one execution. Results
   retain separate gate, judge, and overall decisions in reports.
 
 ### Fixed
+- Initialize independent OpenCode judges with their own provider endpoint and API-key binding,
+  clearing runner-derived provider settings when the judge selects the default endpoint.
 - Traverse symlinked workspace roots and reject escaping symlink chains when
   capturing independent judge snapshots.
 - Reject Git metadata pointer files in judge snapshots, preventing linked
