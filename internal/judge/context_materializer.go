@@ -453,7 +453,15 @@ func isWithin(path, root string) bool {
 	if err != nil {
 		return false
 	}
-	rel, err := filepath.Rel(absRoot, path)
+	// Abs the candidate too: a relative path makes Rel report an error even
+	// when the path is inside the root (e.g. a relative --output-dir handed
+	// down through the artifact dir), which used to surface as a misleading
+	// "escapes context dir" failure.
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
 	if err != nil {
 		return false
 	}

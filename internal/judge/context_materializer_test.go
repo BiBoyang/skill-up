@@ -184,3 +184,20 @@ func assertMaterialPath(t *testing.T, materials []ContextMaterialManifest, key, 
 	}
 	t.Fatalf("material %q not found in %#v", key, materials)
 }
+
+func TestSafeMaterialHostPath_RelativeRoot(t *testing.T) {
+	// Regression: a relative --output-dir flows down as a relative artifact
+	// dir; the guard used to misfire ("escapes context dir") because Rel
+	// cannot compare an absolute root with a relative candidate.
+	t.Chdir(t.TempDir())
+	got, err := safeMaterialHostPath(filepath.Join("out", "ctx"), "final_message.txt")
+	if err != nil {
+		t.Fatalf("relative root must be accepted: %v", err)
+	}
+	if !filepath.IsAbs(got) && got != filepath.Join("out", "ctx", "final_message.txt") {
+		t.Fatalf("unexpected host path %q", got)
+	}
+	if _, err := safeMaterialHostPath(filepath.Join("out", "ctx"), "../escape.txt"); err == nil {
+		t.Fatal("traversal must still be rejected")
+	}
+}
