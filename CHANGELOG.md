@@ -13,9 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `agent_judge` prompts. Linux sandbox targets retain the configured inline
   threshold even when skill-up runs on a Windows host.
 - Accept relative `--output-dir` paths for `agent_judge` cases. The judge context
-  material guard now resolves the candidate path before comparing it with the
-  context root, so a relative output directory no longer fails with a misleading
-  "escapes context dir" error. Path traversal remains rejected.
+  host directory is now resolved to an absolute path before materialization, so a
+  relative output directory no longer fails with a misleading "escapes context
+  dir" error. Path traversal remains rejected.
 
 ### Added
 - Support explicit `judge.engine` configuration independent of the evaluated agent,

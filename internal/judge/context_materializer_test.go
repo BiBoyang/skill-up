@@ -185,19 +185,89 @@ func assertMaterialPath(t *testing.T, materials []ContextMaterialManifest, key, 
 	t.Fatalf("material %q not found in %#v", key, materials)
 }
 
-func TestSafeMaterialHostPath_RelativeRoot(t *testing.T) {
+func TestSafeMaterialHostPath(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "out", "ctx")
+
+	for _, tc := range []struct {
+		name string
+		rel  string
+		want string
+	}{
+		{"plain file", "final_message.txt", filepath.Join(root, "final_message.txt")},
+		{"nested file", filepath.Join("attachments", "01-diff.txt"), filepath.Join(root, "attachments", "01-diff.txt")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := safeMaterialHostPath(root, tc.rel)
+			if err != nil {
+				t.Fatalf("safeMaterialHostPath(%q, %q): %v", root, tc.rel, err)
+			}
+			if got != tc.want {
+				t.Fatalf("safeMaterialHostPath(%q, %q) = %q, want %q", root, tc.rel, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("traversal", func(t *testing.T) {
+		if _, err := safeMaterialHostPath(root, "../escape.txt"); err == nil {
+			t.Fatal("traversal must be rejected")
+		}
+	})
+}
+
+func TestMaterializeJudgeContext_RelativeArtifactDir(t *testing.T) {
 	// Regression: a relative --output-dir flows down as a relative artifact
-	// dir; the guard used to misfire ("escapes context dir") because Rel
-	// cannot compare an absolute root with a relative candidate.
+	// dir. The context host dir must still be absolute so downstream writes
+	// never depend on the process working directory.
 	t.Chdir(t.TempDir())
-	got, err := safeMaterialHostPath(filepath.Join("out", "ctx"), "final_message.txt")
+	artifactDir := filepath.Join("reports", "iteration-1", "case-1", "with_skill", "outputs", "judge", "run")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+
+	mc, err := MaterializeJudgeContext(context.Background(), &mockJudgeTestRuntime{}, nil, Input{
+		FinalMessage: "final answer",
+	}, artifactDir)
 	if err != nil {
-		t.Fatalf("relative root must be accepted: %v", err)
+		t.Fatalf("MaterializeJudgeContext: %v", err)
 	}
-	if !filepath.IsAbs(got) && got != filepath.Join("out", "ctx", "final_message.txt") {
-		t.Fatalf("unexpected host path %q", got)
+
+	wantDir, err := filepath.Abs(filepath.Join("reports", "iteration-1", "case-1", "with_skill", "outputs", "judge", "context"))
+	if err != nil {
+		t.Fatalf("resolve expected context dir: %v", err)
 	}
-	if _, err := safeMaterialHostPath(filepath.Join("out", "ctx"), "../escape.txt"); err == nil {
-		t.Fatal("traversal must still be rejected")
+	if !filepath.IsAbs(mc.Dir) {
+		t.Fatalf("mc.Dir = %q, want an absolute path", mc.Dir)
+	}
+	if mc.Dir != wantDir {
+		t.Fatalf("mc.Dir = %q, want %q", mc.Dir, wantDir)
+	}
+	if _, err := os.Stat(filepath.Join(mc.Dir, "final_message.txt")); err != nil {
+		t.Fatalf("final message material missing: %v", err)
+	}
+}
+
+func TestMaterializeJudgeContext_EmptyArtifactDirUsesAbsoluteTempDir(t *testing.T) {
+	// Use a relative TMPDIR: with an absolute one the pre-fix code already
+	// returned an absolute path and this regression test would pass vacuously.
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll("reltmp", 0o755); err != nil {
+		t.Fatalf("mkdir relative TMPDIR: %v", err)
+	}
+	t.Setenv("TMPDIR", "reltmp")
+	t.Setenv("TMP", "reltmp")
+	t.Setenv("TEMP", "reltmp")
+
+	mc, err := MaterializeJudgeContext(context.Background(), &mockJudgeTestRuntime{}, nil, Input{
+		FinalMessage: "final answer",
+	}, "")
+	if err != nil {
+		t.Fatalf("MaterializeJudgeContext: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(mc.Dir) })
+	if !filepath.IsAbs(mc.Dir) {
+		t.Fatalf("mc.Dir = %q, want an absolute path", mc.Dir)
+	}
+	if _, err := os.Stat(filepath.Join(mc.Dir, "final_message.txt")); err != nil {
+		t.Fatalf("final message material missing: %v", err)
 	}
 }
