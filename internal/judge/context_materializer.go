@@ -205,9 +205,23 @@ func resolveJudgeContext(cfg *config.JudgeContextConfig) effectiveJudgeContext {
 
 func judgeContextHostDir(artifactDir string) (string, error) {
 	if artifactDir == "" {
-		return os.MkdirTemp("", "skill-up-judge-context-*")
+		// MkdirTemp honors TMPDIR, which may itself be relative; normalize the
+		// result so MaterializedContext.Dir is absolute in every branch.
+		dir, err := os.MkdirTemp("", "skill-up-judge-context-*")
+		if err != nil {
+			return "", err
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			_ = os.RemoveAll(dir)
+			return "", err
+		}
+		return abs, nil
 	}
-	return filepath.Join(filepath.Dir(artifactDir), "context"), nil
+	// Normalize here so MaterializedContext.Dir is absolute regardless of
+	// whether --output-dir was given as a relative path. Downstream writes
+	// must not depend on the process working directory.
+	return filepath.Abs(filepath.Join(filepath.Dir(artifactDir), "context"))
 }
 
 func materializeText(ctx context.Context, rt runtime.Runtime, mc *MaterializedContext, key, fileName, content, mode string, maxBytes int) error {
@@ -348,6 +362,8 @@ func safeMaterialRelPath(fileName string) (string, error) {
 	return clean, nil
 }
 
+// safeMaterialHostPath joins rel under root and rejects paths that escape it.
+// root must be absolute; judgeContextHostDir normalizes it at the source.
 func safeMaterialHostPath(root, rel string) (string, error) {
 	hostPath := filepath.Join(root, rel)
 	cleanRoot := filepath.Clean(root)
