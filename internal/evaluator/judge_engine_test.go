@@ -112,7 +112,7 @@ func TestIncompatibleJudgeFailsBeforeRunnerExecution(t *testing.T) {
 	}
 }
 
-func TestIndependentJudgesUseSeparateAgentsAndWorkspaceForks(t *testing.T) {
+func TestIndependentJudgesUseSeparateAgentsAndSharedRuntime(t *testing.T) {
 	workspace := t.TempDir()
 	rt, err := runtime.NewRuntime(runtime.Config{Type: "none", WorkspaceDir: workspace})
 	if err != nil {
@@ -135,7 +135,7 @@ func TestIndependentJudgesUseSeparateAgentsAndWorkspaceForks(t *testing.T) {
 	judges := map[string]*mockAgent{}
 	original := agentDetectWithResolvedConfig
 	agentDetectWithResolvedConfig = func(params credential.ResolvedAgentConfig) (agent.Agent, error) {
-		ag := &mockAgent{name: params.Engine, runFunc: independentJudgeWorkspaceCheck(t, workspace, params.Engine)}
+		ag := &mockAgent{name: params.Engine, runFunc: sharedJudgeWorkspaceCheck(t, workspace, params.Engine)}
 		judges[params.Engine] = ag
 		return ag, nil
 	}
@@ -153,23 +153,27 @@ func TestIndependentJudgesUseSeparateAgentsAndWorkspaceForks(t *testing.T) {
 			t.Fatalf("judge lifecycle incorrect: %s", name)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "judge-change")); !os.IsNotExist(err) {
-		t.Fatal("original workspace modified")
+	data, readErr := os.ReadFile(filepath.Join(workspace, "judge-change"))
+	if readErr != nil || string(data) != "codex" {
+		t.Fatalf("shared judge changes=%q, %v", data, readErr)
 	}
 }
 
-func independentJudgeWorkspaceCheck(t *testing.T, workspace, engine string) func(context.Context, runtime.Runtime, agent.ExecOptions, []transcript.Message) (*agent.SessionResult, error) {
+func sharedJudgeWorkspaceCheck(t *testing.T, workspace, engine string) func(context.Context, runtime.Runtime, agent.ExecOptions, []transcript.Message) (*agent.SessionResult, error) {
 	t.Helper()
 	return func(_ context.Context, current runtime.Runtime, _ agent.ExecOptions, _ []transcript.Message) (*agent.SessionResult, error) {
-		if current.Workspace() == workspace {
-			t.Fatal("judge used original workspace")
+		if current.Workspace() != workspace {
+			t.Fatal("judge did not reuse the original workspace")
 		}
 		data, readErr := os.ReadFile(filepath.Join(current.Workspace(), "answer.txt"))
 		if readErr != nil || string(data) != "completed" {
 			t.Fatalf("judge input=%q, %v", data, readErr)
 		}
-		if _, statErr := os.Stat(filepath.Join(current.Workspace(), "judge-change")); !os.IsNotExist(statErr) {
-			t.Fatal("sibling mutation leaked")
+		if engine == "codex" {
+			previous, err := os.ReadFile(filepath.Join(current.Workspace(), "judge-change"))
+			if err != nil || string(previous) != "claude_code" {
+				t.Fatalf("previous judge change=%q, %v", previous, err)
+			}
 		}
 		if err := os.WriteFile(filepath.Join(current.Workspace(), "judge-change"), []byte(engine), 0o600); err != nil {
 			return nil, err
@@ -341,5 +345,113 @@ func assertIndependentOpenCodeRouting(t *testing.T, content, provider, endpoint 
 	}
 	if value.MCP["keep"] == nil || value.Provider["other"].Options.BaseURL != "https://other.example/v1" || len(value.Plugin) != 1 || value.Plugin[0] != "keep-plugin" || value.Permission["bash"] != "ask" {
 		t.Fatal("unrelated runtime configuration was lost")
+	}
+}
+
+func TestOpenCodeJudgeConnectionOrder(t *testing.T) {
+	for _, provider := range []string{"openai", "review-provider"} {
+		for _, endpoint := range []string{"https://runner.example/v1", ""} {
+			for _, order := range []string{"legacy", "independent,legacy", "legacy,independent,legacy"} {
+				t.Run(provider+"/"+endpoint+"/"+order, func(t *testing.T) {
+					checkOpenCodeJudgeConnectionOrder(t, provider, endpoint, order)
+				})
+			}
+		}
+	}
+}
+
+func checkOpenCodeJudgeConnectionOrder(t *testing.T, provider, endpoint, order string) {
+	t.Helper()
+	for _, suffix := range []string{"_BASE_URL", "_API_KEY", "_MODEL", "_AUTH_TOKEN"} {
+		t.Setenv(strings.ToUpper(provider)+suffix, "")
+	}
+	ctx := context.Background()
+	underlying, err := runtime.NewRuntime(runtime.Config{Type: "none", WorkspaceDir: t.TempDir(), Env: map[string]string{
+		"OPENCODE_CONFIG_CONTENT": `{"mcp":{"keep":{"type":"remote","url":"https://mcp.example"}},"provider":{"other":{"options":{"baseURL":"https://other.example/v1"}}}}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := underlying.Create(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = underlying.Close() })
+	current := &openCodeJudgePreflightRuntime{Runtime: underlying}
+	runner := credential.ResolvedAgentConfig{Engine: "opencode", Provider: provider, Model: "runner-model", BaseURL: endpoint, APIKey: "runner-test-key"}
+	runAgent := agent.NewOpenCodeAgent(agent.Config{ModelProvider: provider, ModelName: "runner-model", BaseURL: endpoint, APIKey: "runner-test-key"})
+	if err := runAgent.InstallMCP(ctx, current, runtime.MCPConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	e := newTestEvaluator(EvalOptions{EvalCfg: &config.EvalConfig{Engine: config.EngineConfig{Name: "opencode"}, Environment: config.Environment{Type: "none"}}, RunnerConfig: runner})
+	for member := range strings.SplitSeq(order, ",") {
+		cfg := config.JudgeConfig{Type: "agent_judge", Model: provider + "/runner-model", Criteria: []string{"quality"}}
+		wantEndpoint, wantKey := endpoint, "runner-test-key"
+		if member == "independent" {
+			cfg.Model = ""
+			cfg.Engine = &config.EngineConfig{Name: "opencode", Model: config.ModelConfig{Provider: provider, Name: "judge-model", BaseURL: "https://judge.example/v1"}}
+			wantEndpoint, wantKey = "https://judge.example/v1", ""
+		}
+		created, err := e.newJudgeForCase(ctx, current, "without_skill", cfg, &mockAgent{name: "opencode"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		semantic, ok := created.(*judge.AgentJudge)
+		if !ok {
+			t.Fatalf("unexpected judge type %T", created)
+		}
+		openCode, ok := semantic.Agent.(*agent.OpenCodeAgent)
+		if !ok {
+			t.Fatalf("unexpected adapter type %T", semantic.Agent)
+		}
+		resolved := openCode.Cfg
+		if resolved.BaseURL != wantEndpoint || resolved.APIKey != wantKey {
+			t.Fatalf("%s resolved connection differs from expected", member)
+		}
+		assertOpenCodeMemberConnection(ctx, t, current, provider, wantEndpoint, wantKey)
+	}
+}
+
+func assertOpenCodeMemberConnection(ctx context.Context, t *testing.T, current runtime.Runtime, provider, endpoint, key string) {
+	t.Helper()
+	read, err := current.Exec(ctx, `printf '%s' "$OPENCODE_CONFIG_CONTENT"`, runtime.ExecOptions{})
+	if err != nil || read.ExitCode != 0 {
+		t.Fatalf("read provider config: %v", err)
+	}
+	var value struct {
+		MCP      map[string]json.RawMessage `json:"mcp"`
+		Provider map[string]struct {
+			Options map[string]string `json:"options"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal([]byte(read.Stdout), &value); err != nil {
+		t.Fatal(err)
+	}
+	entry, exists := value.Provider[provider]
+	if (endpoint == "" && exists) || entry.Options["baseURL"] != endpoint {
+		t.Fatalf("provider %s: got endpoint %q (exists=%t), want %q", provider, entry.Options["baseURL"], exists, endpoint)
+	}
+	if value.MCP["keep"] == nil || value.Provider["other"].Options["baseURL"] != "https://other.example/v1" {
+		t.Fatal("unrelated MCP/provider configuration lost")
+	}
+	if provider == "review-provider" && endpoint != "" {
+		assertOpenCodeMemberKey(ctx, t, current, entry.Options["apiKey"], key)
+	}
+}
+
+func assertOpenCodeMemberKey(ctx context.Context, t *testing.T, current runtime.Runtime, binding, key string) {
+	t.Helper()
+	if key == "" {
+		if binding != "" {
+			t.Fatal("judge inherited a sibling key binding")
+		}
+		return
+	}
+
+	if binding != "{env:SKILL_UP_OPENCODE_API_KEY}" {
+		t.Fatal("custom provider key binding lost")
+	}
+	read, err := current.Exec(ctx, `printf '%s' "$SKILL_UP_OPENCODE_API_KEY"`, runtime.ExecOptions{})
+	if err != nil || read.ExitCode != 0 || read.Stdout != key {
+		t.Fatal("custom provider inherited a sibling key")
 	}
 }
